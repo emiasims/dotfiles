@@ -1,6 +1,6 @@
-abbr --add l 'ls -lh'
-abbr --add la 'ls -Alh'
-abbr --add lx 'ls -lXh'
+abbr --add l 'ls -lh --group-directories-first'
+abbr --add la 'ls -Alh --group-directories-first'
+abbr --add lx 'ls -lXh --group-directories-first'
 abbr --add --set-cursor lt 'ls -lth %| head'
 abbr --add --set-cursor lm 'ls -lh %| more'
 abbr --add lb "ls -lh -I'*-bak'"
@@ -69,3 +69,4 @@ abbr --add clo 'config log --all --oneline --decorate --graph -n 20'
 
 abbr --add pd prevd
 abbr --add nd nextd
+abbr --add cdp 'cd (git rev-parse --show-toplevel)'

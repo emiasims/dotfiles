@@ -34,7 +34,8 @@ if string match -rq -- "kitty" "$TERM"
   abbr --add icat 'kitty +kitten icat'
 end
 
-abbr --add gst 'git status'
+abbr --add gst 'git status .'
+abbr --add gsta 'git status'
 abbr --add gpl 'git pull'
 abbr --add gpu 'git push'
 abbr --add gad 'git add'

@@ -1,0 +1,8 @@
+[alias]
+	cfg = !git -C $HOME --git-dir=.cfg --work-tree=.
+[init]
+	defaultBranch = main
+[maintenance]
+	repo = ~/.config/nvim
+[core]
+	excludeFile = ~/.config/git/ignore

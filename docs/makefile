@@ -40,13 +40,14 @@ $(SSH)/id_rsa.pub:
 $(DOTCFG):
 	@echo -e "$(CYLW)> Cloning config$(CGREY)"
 	git clone --bare $(GIT)/dotfiles.git $(DOTCFG)
-	git config --global alias.cfg '!git --git-dir=$$HOME/.cfg --work-tree=$$HOME'
+	git config --global alias.cfg '!git -C $HOME --git-dir=$$HOME/.cfg'
 	@echo -e "$(CGRN)== Cloned config$(CEND)"
 
 $(LOCAL): | $(DOTCFG)
 	@echo -e "$(CYLW)> Installing dotfiles$(CGREY)"
 	git cfg sparse-checkout set --cone .config .local
 	git cfg config status.showUntrackedFiles no
+	git cfg config core.worktree $HOME
 	@git cfg reset -q HEAD
 	@git cfg restore .
 	fish -c 'set_my_colors'

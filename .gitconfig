@@ -1,5 +1,5 @@
 [alias]
-	cfg = !git -C $HOME --git-dir=.cfg --work-tree=.
+	cfg = !git -C $HOME --git-dir=$HOME/.cfg
 [init]
 	defaultBranch = main
 [maintenance]

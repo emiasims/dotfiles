@@ -1,3 +1,5 @@
-To install:
+# dotfiles
 
-`wget https://raw.githubusercontent.com/milisims/dotfiles/refs/heads/master/docs/makefile && make`
+Personal dotfiles managed with [GNU stow](https://www.gnu.org/software/stow/).
+
+clone, cd, and run `install.sh`

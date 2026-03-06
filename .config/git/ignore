@@ -6,3 +6,5 @@ tags
 *.egg-info
 tmp*
 .aider*
+.worktrees
+**/.claude/settings.local.json

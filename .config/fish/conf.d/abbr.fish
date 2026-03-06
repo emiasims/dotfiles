@@ -27,7 +27,7 @@ abbr --add wget 'wget'
 abbr --add tls 'tmux ls'
 abbr --add tns 'tmux new -s'
 abbr --add tat 'tmux attach -t'
-abbr --add org 'nvim +OrgAgenda'
+abbr --add oc 'opencode'
 
 if string match -rq -- "kitty" "$TERM"
   abbr --add ssh 'kitty +kitten ssh'

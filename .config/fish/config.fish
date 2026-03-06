@@ -6,7 +6,7 @@ set -x LESS_TERMCAP_so (printf "\033[01;44;33m")   # begin standout-mode - info 
 set -x LESS_TERMCAP_ue (printf "\033[0m")          # end underline
 set -x LESS_TERMCAP_us (printf "\033[01;32m")      # begin underline
 
-set EDITOR nvim
+set -gx EDITOR nvim
 
 fish_add_path -g ~/.local/bin
 fish_add_path -g ~/local/bin
@@ -30,4 +30,8 @@ bind -M insert \e\[13\;5u insert-line-over
 
 if test -n "$SSH_CLIENT"
   set -g fish_color_host $fish_color_host_remote
+end
+
+if test -n "$WSL_DISTRO_NAME"
+  set -gx COLORTERM truecolor
 end

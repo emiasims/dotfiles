@@ -4,8 +4,8 @@ IFS=$'\n\t'
 
 function update_nvim() {
   SRC=$HOME/.local/src
-  mkdir -p $SRC
-  cd $SRC
+  mkdir -p "$SRC"
+  cd "$SRC"
 
   local build=nightly
   if [[ "$1" = "-s" || "$1" = "--stable" ]]; then
@@ -13,22 +13,23 @@ function update_nvim() {
   fi
 
   if [[ -f nvim.appimage ]]; then
-    local version=$(./nvim.appimage --version | head -n1 | cut -f2 -d' ')
-    mv $SRC/nvim.appimage $SRC/nvim-${version}.appimage
+    local version
+    version=$(./nvim.appimage --version | head -n1 | cut -f2 -d' ')
+    mv "$SRC/nvim.appimage" "$SRC/nvim-${version}.appimage"
   fi
 
   local url=https://github.com/neovim/neovim/releases/download/$build/nvim-linux-x86_64.appimage
-  wget $url -O nvim.appimage > /dev/null 2>&1
+  wget "$url" -O nvim.appimage > /dev/null 2>&1
   rm -rf nvim-runtime
   chmod 755 nvim.appimage
   ./nvim.appimage --appimage-extract > /dev/null 2>&1
   mv squashfs-root nvim-runtime
 
-  ln -sf $SRC/nvim-runtime/AppRun $HOME/.local/bin/nvim
+  ln -sf "$SRC/nvim-runtime/AppRun" "$HOME/.local/bin/nvim"
   mkdir -p ~/.local/share/applications
-  ln -sf $SRC/nvim-runtime/nvim.desktop ~/.local/share/applications
+  ln -sf "$SRC/nvim-runtime/nvim.desktop" ~/.local/share/applications
 
   echo "Installed $(nvim-runtime/AppRun --version | head -n1 | cut -f2 -d' ')"
 }
 
-update_nvim $1
+update_nvim "$1"

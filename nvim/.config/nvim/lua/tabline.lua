@@ -1,0 +1,171 @@
+local api = vim.api
+
+---@param layout vim.fn.winlayout.ret
+---@param win_specs table<number, mia.line.spec>
+local function window_layout(layout, win_specs)
+  local node_type = layout[1]
+
+  if node_type == 'leaf' then
+    return { win_specs[layout[2]], type = 'leaf' }
+  end
+
+  -- First do it recursively..
+  local it = vim.iter(layout[2]):map(function(_layout) return window_layout(_layout, win_specs) end)
+
+  -- now join with separator logic:
+  -- add padding that separates units within the window layout.
+  -- A| B/C indicates A takes the left vsplit, and B and C take the right splits
+  -- A|B /C indicates A and B take the top split vertically, and C takes the bottom
+  local res = it:fold(it:next(), function(t, node)
+    local sep = (node_type == 'row') and '|' or '/'
+
+    if t.type ~= 'leaf' and t.type ~= node_type then
+      sep = ' ' .. sep
+    end
+
+    if node.type ~= 'leaf' and node.type ~= node_type then
+      sep = sep .. ' '
+    end
+
+    table.insert(t, sep)
+    vim.list_extend(t, node)
+    t.type = node.type
+    return t
+  end)
+  res.type = node_type
+  return res
+end
+
+local clickable_window = function(winid)
+  return function(_, _, button, _)
+    if button == 'l' then
+      api.nvim_set_current_win(winid)
+    elseif button == 'r' then
+      api.nvim_win_close(winid, false)
+    end
+  end
+end
+
+local function tab_layout()
+  local current_win = api.nvim_get_current_win()
+  local current_tab = api.nvim_get_current_tabpage()
+
+  local bufname_counts = { ['init.lua'] = 1 } -- all init.lua gets modified
+  for _, buf in ipairs(api.nvim_list_bufs()) do
+    local name = vim.fs.basename(vim.fn.bufname(buf))
+    bufname_counts[name] = bufname_counts[name] and bufname_counts[name] + 1 or 1
+  end
+
+  ---@type mia.line.spec[]
+  local tabline = {}
+  for _, tabid in ipairs(api.nvim_list_tabpages()) do
+    ---@type table<number, mia.line.spec>
+    local win_specs = {}
+
+    -- First, for this tab get the names as displayed for each window
+    for _, winid in ipairs(api.nvim_tabpage_list_wins(tabid)) do
+      local buf = vim.fn.winbufnr(winid)
+      local info = mia.bufinfo(buf)
+
+      local name = info.tab_name
+      if not name and info.type ~= 'file' then
+        local fmt = (info.name and '[%s:%s]' or '[%s]')
+        name = fmt:format(info.type, info.name)
+      elseif not name then -- is file
+        name = info.name
+        local path = vim.split(info.bufname, '/', { plain = true })
+        local ix = #path - 1
+        local dir = path[ix] -- # TODO loop and make, e.g nvim/lua➔init.lua
+        bufname_counts[name] = bufname_counts[name] or 1
+
+        -- if the file buffer is duplicated in name, indicate which with a prefix
+        -- init.lua -> mia➔init.lua for example.
+        if dir and bufname_counts[name] > 1 then
+          name = ('%s➔%s'):format(dir, name)
+        end
+      end
+
+      name = name:gsub('%%', '%%%%')
+
+      win_specs[winid] = {
+        name,
+        hl = winid == current_win and 'TabLineWin' or nil,
+        on_click = winid ~= current_win and clickable_window(winid) or nil,
+      }
+    end
+
+    local tabnr = api.nvim_tabpage_get_number(tabid)
+
+    table.insert(tabline, {
+      { ('%%%dT%d'):format(tabnr, tabnr), pad = true },
+      window_layout(vim.fn.winlayout(tabnr), win_specs),
+      '%T ',
+      hl = tabid == current_tab and 'TabLineSel',
+    })
+  end
+
+  return tabline
+end
+
+local function session()
+  if not vim.g.session then
+    return
+  end
+  local name = vim.g.session.name
+  if #name > (vim.o.columns * 0.2) then
+    local root = name:match('^.*➔') or ''
+    name = name:sub(#root + 1)
+    name = name:gsub('([^/])[^/]*/', '%1/')
+    name = root .. name
+  end
+  return {
+    ('[%s: %s]  '):format(require('session').is_enabled() and 'S' or '$', name),
+    on_click = function(_, _, button, _)
+      if button == 'l' then
+        vim.cmd.Pick('sessions')
+      end
+    end,
+  }
+end
+
+local function macro_status()
+  local reg = vim.fn.reg_recording()
+  return reg ~= '' and ('[q:%s]'):format(reg) or nil
+end
+
+local oc_status
+local function opencode()
+  if not package.loaded['opencode'] then
+    return
+  end
+  oc_status = oc_status or require('opencode.status')
+  return {
+    oc_status.statusline_icon() .. '  ',
+    hl = ({
+      idle = nil,
+      error = 'Error',
+      responding = 'Character',
+      requesting_permission = 'Todo',
+    })[oc_status.status],
+  }
+end
+
+local function definition()
+  return {
+    tab_layout,
+    '%=',
+    { macro_status, hl = 'TabLineRecording', pad = true },
+    { '%S', pad = true },
+    opencode,
+    { session, hl = 'TabLineSession', pad = true },
+  }
+end
+
+function _G.tabline() return mia.line.render(definition, 'tabline') end
+vim.o.tabline = '%!v:lua.tabline()'
+
+return {
+  win_layout = window_layout,
+  tab_layout = tab_layout,
+  definition = definition,
+}

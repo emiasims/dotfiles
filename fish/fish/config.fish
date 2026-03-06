@@ -28,10 +28,6 @@ bind -M insert \e\[13\;2u insert-line-under
 # C-Cr, add line above current line
 bind -M insert \e\[13\;5u insert-line-over
 
-if test -n "$SSH_CLIENT"
-  set -g fish_color_host $fish_color_host_remote
-end
-
 if test -n "$WSL_DISTRO_NAME"
   set -gx COLORTERM truecolor
 end

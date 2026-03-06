@@ -47,32 +47,41 @@ install_system_packages() {
 }
 
 # ── Stow ──────────────────────────────────────────────────────────────────────
-STOW_PACKAGES=(fish git kitty lazygit mise nvim scripts shell tmux zsh)
+
+# Remove conflicting regular files at $HOME/$rel for top-level files only.
+# Used for packages that place dotfiles directly in $HOME (shell, zsh).
+remove_home_conflicts() {
+  local pkg="$1"
+  while IFS= read -r -d '' src; do
+    local rel="${src#"$DOTFILES/$pkg/"}"
+    local dest="$HOME/$rel"
+    if [[ -e "$dest" && ! -L "$dest" ]]; then
+      log_warn "Removing conflicting file: $dest"
+      rm -f "$dest"
+    fi
+  done < <(find "$DOTFILES/$pkg" -maxdepth 1 -type f -print0)
+}
 
 stow_package() {
   local pkg="$1"
+  local target="${2:-$HOME}"
   [[ -d "$DOTFILES/$pkg" ]] || { log_warn "Package '$pkg' not found, skipping."; return; }
-
   log_step "Stowing $pkg..."
-
-  # Remove conflicting regular files (not symlinks) before stowing.
-  while IFS= read -r -d '' src; do
-    local rel="${src#"$DOTFILES/$pkg/"}"
-    local target="$HOME/$rel"
-    if [[ -e "$target" && ! -L "$target" ]]; then
-      log_warn "Removing conflicting file: $target"
-      rm -f "$target"
-    fi
-  done < <(find "$DOTFILES/$pkg" -type f -print0)
-
-  stow -R -d "$DOTFILES" -t "$HOME" "$pkg"
+  stow -R -d "$DOTFILES" -t "$target" "$pkg"
 }
 
 stow_all_packages() {
   log_info "Stowing packages..."
-  for pkg in "${STOW_PACKAGES[@]}"; do
-    stow_package "$pkg"
-  done
+  remove_home_conflicts shell;   stow_package shell
+  remove_home_conflicts zsh;     stow_package zsh
+  stow_package fish    "$HOME/.config"
+  stow_package git     "$HOME/.config"
+  stow_package kitty   "$HOME/.config"
+  stow_package lazygit "$HOME/.config"
+  stow_package mise    "$HOME/.config"
+  stow_package nvim    "$HOME/.config"
+  stow_package scripts "$HOME/.local"
+  stow_package tmux
   log_info "Stow complete."
 }
 
@@ -117,15 +126,49 @@ install_nvim() {
   log_info "Neovim installed."
 }
 
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [flags]
+
+With no flags, runs all install steps.
+
+Flags:
+  -p, --packages   Install system packages (apt / brew)
+  -s, --stow       Stow dotfiles into \$HOME
+  -m, --mise       Install mise and all tools
+  -n, --nvim       Install neovim (Linux only)
+  -h, --help       Show this help
+EOF
+}
+
 main() {
   local os
   os="$(detect_os)"
+
+  local do_packages=false do_stow=false do_mise=false do_nvim=false
+  local any=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--packages) do_packages=true; any=true ;;
+      -s|--stow)     do_stow=true;     any=true ;;
+      -m|--mise)     do_mise=true;     any=true ;;
+      -n|--nvim)     do_nvim=true;     any=true ;;
+      -h|--help)     usage; exit 0 ;;
+      *) log_error "Unknown flag: $1"; usage; exit 1 ;;
+    esac
+    shift
+  done
+
+  if [[ "$any" == false ]]; then
+    do_packages=true; do_stow=true; do_mise=true; do_nvim=true
+  fi
+
   log_info "Detected OS: $os"
-  install_system_packages "$os"
-  stow_all_packages
-  install_mise
-  install_tools
-  install_nvim "$os"
+  [[ "$do_packages" == true ]] && install_system_packages "$os"
+  [[ "$do_stow"     == true ]] && stow_all_packages
+  [[ "$do_mise"     == true ]] && { install_mise; install_tools; }
+  [[ "$do_nvim"     == true ]] && install_nvim "$os"
 }
 
 main "$@"

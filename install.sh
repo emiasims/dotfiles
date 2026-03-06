@@ -109,6 +109,75 @@ install_tools() {
   log_info "Tools installed."
 }
 
+# ── Configure ─────────────────────────────────────────────────────────────────
+
+setup_fish_shell() {
+  local fish_path
+  fish_path="$(command -v fish 2>/dev/null)" || { log_warn "fish not found, skipping shell setup."; return; }
+  if [[ "$SHELL" == "$fish_path" ]]; then
+    log_info "fish is already the default shell."
+    return
+  fi
+  log_info "Setting fish as default shell..."
+  if ! grep -qF "$fish_path" /etc/shells; then
+    log_step "Adding $fish_path to /etc/shells..."
+    echo "$fish_path" | sudo tee -a /etc/shells > /dev/null
+  fi
+  chsh -s "$fish_path"
+  log_info "Default shell set to fish."
+}
+
+setup_nvim_plugins() {
+  local nvim_bin="$HOME/.local/bin/nvim"
+  if [[ ! -x "$nvim_bin" ]]; then
+    log_warn "nvim not found at $nvim_bin, skipping plugin sync."
+    return
+  fi
+  log_info "Syncing Neovim plugins..."
+  "$nvim_bin" --headless "+Lazy! sync" +qa
+  log_info "Neovim plugins synced."
+}
+
+setup_uv_venv() {
+  local venv="$1"
+  shift
+  if [[ -d "$venv" ]]; then
+    log_info "venv already exists: $venv"
+    return
+  fi
+  log_info "Creating venv: $venv"
+  "$MISE_BIN" exec -- uv venv "$venv" --seed --color never
+  "$venv/bin/pip" install --quiet "$@"
+  log_info "venv ready: $venv"
+}
+
+setup_fonts() {
+  local fonts_dir="$HOME/.local/share/fonts"
+  local sentinel="$fonts_dir/SymbolsNerdFontMono-Regular.ttf"
+  if [[ -f "$sentinel" ]]; then
+    log_info "Nerd Fonts Symbols already installed."
+    return
+  fi
+  log_info "Installing Nerd Fonts Symbols..."
+  mkdir -p "$fonts_dir"
+  local tmp
+  tmp="$(mktemp --suffix=.tar.xz)"
+  wget -q "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/NerdFontsSymbolsOnly.tar.xz" -O "$tmp"
+  tar -C "$fonts_dir" -xJf "$tmp" --wildcards '*.ttf'
+  rm -f "$tmp"
+  log_info "Nerd Fonts Symbols installed."
+}
+
+configure() {
+  log_info "Configuring..."
+  setup_fish_shell
+  setup_nvim_plugins
+  setup_uv_venv "$HOME/.local/share/venv/base"        ipython pipx
+  setup_uv_venv "$HOME/.local/share/nvim/venv"        pynvim
+  setup_fonts
+  log_info "Configuration complete."
+}
+
 # ── Neovim ────────────────────────────────────────────────────────────────────
 install_nvim() {
   local os="$1"
@@ -137,6 +206,7 @@ Flags:
   -s, --stow       Stow dotfiles into \$HOME
   -m, --mise       Install mise and all tools
   -n, --nvim       Install neovim (Linux only)
+  -c, --configure  Post-install configuration (plugins, shell, venvs, fonts)
   -h, --help       Show this help
 EOF
 }
@@ -145,30 +215,32 @@ main() {
   local os
   os="$(detect_os)"
 
-  local do_packages=false do_stow=false do_mise=false do_nvim=false
+  local do_packages=false do_stow=false do_mise=false do_nvim=false do_configure=false
   local any=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -p|--packages) do_packages=true; any=true ;;
-      -s|--stow)     do_stow=true;     any=true ;;
-      -m|--mise)     do_mise=true;     any=true ;;
-      -n|--nvim)     do_nvim=true;     any=true ;;
-      -h|--help)     usage; exit 0 ;;
+      -p|--packages)  do_packages=true;  any=true ;;
+      -s|--stow)      do_stow=true;      any=true ;;
+      -m|--mise)      do_mise=true;      any=true ;;
+      -n|--nvim)      do_nvim=true;      any=true ;;
+      -c|--configure) do_configure=true; any=true ;;
+      -h|--help)      usage; exit 0 ;;
       *) log_error "Unknown flag: $1"; usage; exit 1 ;;
     esac
     shift
   done
 
   if [[ "$any" == false ]]; then
-    do_packages=true; do_stow=true; do_mise=true; do_nvim=true
+    do_packages=true; do_stow=true; do_mise=true; do_nvim=true; do_configure=true
   fi
 
   log_info "Detected OS: $os"
-  [[ "$do_packages" == true ]] && install_system_packages "$os"
-  [[ "$do_stow"     == true ]] && stow_all_packages
-  [[ "$do_mise"     == true ]] && { install_mise; install_tools; }
-  [[ "$do_nvim"     == true ]] && install_nvim "$os"
+  [[ "$do_packages"  == true ]] && install_system_packages "$os"
+  [[ "$do_stow"      == true ]] && stow_all_packages
+  [[ "$do_mise"      == true ]] && { install_mise; install_tools; }
+  [[ "$do_nvim"      == true ]] && install_nvim "$os"
+  [[ "$do_configure" == true ]] && configure
 }
 
 main "$@"

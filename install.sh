@@ -8,56 +8,77 @@ DOTFILES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RED='\033[0;31m'
 GRN='\033[0;32m'
 YLW='\033[0;33m'
+CYN='\033[0;36m'
 RST='\033[0m'
 
 log_info()  { echo -e "${GRN}==>${RST} $*"; }
 log_step()  { echo -e "${YLW} ->${RST} $*"; }
 log_warn()  { echo -e "${YLW}[warn]${RST} $*"; }
 log_error() { echo -e "${RED}[error]${RST} $*" >&2; }
+log_dry()   { echo -e "${CYN}[dry-run]${RST} would run: $*"; }
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+DRY_RUN=false
 
 # ── OS detection ──────────────────────────────────────────────────────────────
-detect_os() {
-  case "$(uname -s)" in
-    Linux*)  echo "linux" ;;
-    Darwin*) echo "macos" ;;
-    *)       log_error "Unsupported OS: $(uname -s)"; exit 1 ;;
-  esac
+get_pretty_os_name() {
+  if [[ -f /etc/os-release ]]; then
+    source /etc/os-release
+    echo "${PRETTY_NAME:-$NAME}"
+  elif command -v lsb_release &>/dev/null; then
+    lsb_release -d | cut -f2-
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    sw_vers -productName && sw_vers -productVersion | tr '\n' ' ' | xargs
+  else
+    uname -s
+  fi
 }
 
 # ── System packages ───────────────────────────────────────────────────────────
-SYSTEM_PACKAGES=(stow git curl wget fish universal-ctags)
-
+# $@: optional package list override (replaces conf PACKAGES)
 install_system_packages() {
-  local os="$1"
-  log_info "Installing system packages: ${SYSTEM_PACKAGES[*]}"
+  local override=("$@")
+  local conf_dir="$DOTFILES/system"
+  [[ -d "$conf_dir" ]] || { log_error "system/ directory not found"; exit 1; }
 
-  if [[ "$os" == "linux" ]]; then
-    sudo apt-get update -qq
-    sudo apt-get install -y "${SYSTEM_PACKAGES[@]}"
-
-  elif [[ "$os" == "macos" ]]; then
-    if ! command -v brew &>/dev/null; then
-      log_error "Homebrew not found. Install it first: https://brew.sh"
-      exit 1
+  local conf
+  for conf in "$conf_dir"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    unset DETECT COMMAND PACKAGES
+    # shellcheck source=/dev/null
+    source "$conf"
+    if eval "${DETECT:-false}" &>/dev/null; then
+      local pkgs=("${override[@]:-${PACKAGES[@]}}")
+      log_info "Installing system packages via: $COMMAND"
+      if [[ "$DRY_RUN" == true ]]; then
+        log_dry "$COMMAND ${pkgs[*]}"
+      else
+        eval "$COMMAND ${pkgs[*]@Q}"
+      fi
+      log_info "System packages installed."
+      return 0
     fi
-    brew install "${SYSTEM_PACKAGES[@]}"
-  fi
+  done
 
-  log_info "System packages installed."
+  log_warn "No supported package manager found"
 }
 
 # ── Stow ──────────────────────────────────────────────────────────────────────
 
-# Remove conflicting regular files at $HOME/$rel for top-level files only.
-# Used for packages that place dotfiles directly in $HOME (shell, zsh).
+# Remove conflicting regular files at $target/$rel for top-level files only.
+# Used for packages with FORCE=true (e.g. shell, zsh).
 remove_home_conflicts() {
-  local pkg="$1"
+  local pkg="$1" target="$2"
   while IFS= read -r -d '' src; do
     local rel="${src#"$DOTFILES/$pkg/"}"
-    local dest="$HOME/$rel"
+    local dest="$target/$rel"
     if [[ -e "$dest" && ! -L "$dest" ]]; then
-      log_warn "Removing conflicting file: $dest"
-      rm -f "$dest"
+      if [[ "$DRY_RUN" == true ]]; then
+        log_dry "rm -f $dest  (conflicting file)"
+      else
+        log_warn "Removing conflicting file: $dest"
+        rm -f "$dest"
+      fi
     fi
   done < <(find "$DOTFILES/$pkg" -maxdepth 1 -type f -print0)
 }
@@ -65,23 +86,78 @@ remove_home_conflicts() {
 stow_package() {
   local pkg="$1"
   local target="${2:-$HOME}"
+  local extra_ignore="${3:-}"
   [[ -d "$DOTFILES/$pkg" ]] || { log_warn "Package '$pkg' not found, skipping."; return; }
-  log_step "Stowing $pkg..."
-  stow -R -d "$DOTFILES" -t "$target" "$pkg"
+  log_step "Stowing $pkg -> $target..."
+  local stow_args=(-R --ignore='package\.conf')
+  [[ -n "$extra_ignore" ]] && stow_args+=(--ignore="$extra_ignore")
+  [[ "$DRY_RUN" == true ]] && stow_args+=(--simulate)
+  stow "${stow_args[@]}" -d "$DOTFILES" -t "$target" "$pkg"
 }
 
+run_setup() {
+  local pkg="$1" setup="$2"
+  [[ -z "$setup" ]] && return
+  if [[ -f "$DOTFILES/$pkg/$setup" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_dry "bash $DOTFILES/$pkg/$setup"
+    else
+      log_step "Running setup for $pkg..."
+      bash "$DOTFILES/$pkg/$setup"
+    fi
+  else
+    if [[ "$DRY_RUN" == true ]]; then
+      log_dry "eval: $setup  (setup for $pkg)"
+    else
+      log_step "Running setup for $pkg: $setup"
+      eval "$setup"
+    fi
+  fi
+}
+
+# Stow one package by name, sourcing its package.conf for settings.
+stow_one() {
+  local pkg="$1"
+  local pkg_conf="$DOTFILES/$pkg/package.conf"
+  if [[ ! -f "$pkg_conf" ]]; then
+    log_warn "No package.conf for '$pkg', skipping."
+    return
+  fi
+
+  local TARGET=~/.config FORCE=false STOW_OPTS= SETUP=
+  # shellcheck source=/dev/null
+  source "$pkg_conf"
+
+  local target="${TARGET/#\~/$HOME}"
+  [[ "$FORCE" == true ]] && remove_home_conflicts "$pkg" "$target"
+
+  local setup_ignore=
+  [[ -n "$SETUP" && -f "$DOTFILES/$pkg/$SETUP" ]] && setup_ignore="$SETUP"
+
+  stow_package "$pkg" "$target" "$setup_ignore"
+  run_setup "$pkg" "$SETUP"
+}
+
+# $@: optional list of packages to stow (empty = all)
 stow_all_packages() {
+  local filter=("$@")
   log_info "Stowing packages..."
-  remove_home_conflicts shell;   stow_package shell
-  remove_home_conflicts zsh;     stow_package zsh
-  stow_package fish    "$HOME/.config"
-  stow_package git     "$HOME/.config"
-  stow_package kitty   "$HOME/.config"
-  stow_package lazygit "$HOME/.config"
-  stow_package mise    "$HOME/.config"
-  stow_package nvim    "$HOME/.config"
-  stow_package scripts "$HOME/.local"
-  stow_package tmux
+
+  if [[ ${#filter[@]} -gt 0 ]]; then
+    local pkg
+    for pkg in "${filter[@]}"; do
+      stow_one "$pkg"
+    done
+  else
+    local pkg_conf
+    for pkg_conf in "$DOTFILES"/*/package.conf; do
+      [[ -f "$pkg_conf" ]] || continue
+      local pkg
+      pkg="$(basename "$(dirname "$pkg_conf")")"
+      stow_one "$pkg"
+    done
+  fi
+
   log_info "Stow complete."
 }
 
@@ -93,6 +169,10 @@ install_mise() {
     log_info "mise already installed: $("$MISE_BIN" --version)"
     return
   fi
+  if [[ "$DRY_RUN" == true ]]; then
+    log_dry "curl -fsSL https://mise.run | sh"
+    return
+  fi
   log_info "Installing mise..."
   curl -fsSL https://mise.run | sh
   log_info "mise installed: $("$MISE_BIN" --version)"
@@ -101,8 +181,16 @@ install_mise() {
 install_tools() {
   local config="$HOME/.config/mise/config.toml"
   if [[ ! -f "$config" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_dry "$MISE_BIN install  (skipping: mise config not yet stowed)"
+      return
+    fi
     log_error "mise config not found at $config. Was the 'mise' package stowed?"
     exit 1
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    log_dry "$MISE_BIN install"
+    return
   fi
   log_info "Installing tools via mise..."
   "$MISE_BIN" install
@@ -110,137 +198,145 @@ install_tools() {
 }
 
 # ── Configure ─────────────────────────────────────────────────────────────────
-
-setup_fish_shell() {
-  local fish_path
-  fish_path="$(command -v fish 2>/dev/null)" || { log_warn "fish not found, skipping shell setup."; return; }
-  if [[ "$SHELL" == "$fish_path" ]]; then
-    log_info "fish is already the default shell."
-    return
-  fi
-  log_info "Setting fish as default shell..."
-  if ! grep -qF "$fish_path" /etc/shells; then
-    log_step "Adding $fish_path to /etc/shells..."
-    echo "$fish_path" | sudo tee -a /etc/shells > /dev/null
-  fi
-  chsh -s "$fish_path"
-  log_info "Default shell set to fish."
-}
-
-setup_nvim_plugins() {
-  local nvim_bin="$HOME/.local/bin/nvim"
-  if [[ ! -x "$nvim_bin" ]]; then
-    log_warn "nvim not found at $nvim_bin, skipping plugin sync."
-    return
-  fi
-  log_info "Syncing Neovim plugins..."
-  "$nvim_bin" --headless "+Lazy! sync" +qa
-  log_info "Neovim plugins synced."
-}
-
-setup_uv_venv() {
-  local venv="$1"
-  shift
-  if [[ -d "$venv" ]]; then
-    log_info "venv already exists: $venv"
-    return
-  fi
-  log_info "Creating venv: $venv"
-  "$MISE_BIN" exec -- uv venv "$venv" --seed --color never
-  "$venv/bin/pip" install --quiet "$@"
-  log_info "venv ready: $venv"
-}
-
-setup_fonts() {
-  local fonts_dir="$HOME/.local/share/fonts"
-  local sentinel="$fonts_dir/SymbolsNerdFontMono-Regular.ttf"
-  if [[ -f "$sentinel" ]]; then
-    log_info "Nerd Fonts Symbols already installed."
-    return
-  fi
-  log_info "Installing Nerd Fonts Symbols..."
-  mkdir -p "$fonts_dir"
-  local tmp
-  tmp="$(mktemp --suffix=.tar.xz)"
-  wget -q "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/NerdFontsSymbolsOnly.tar.xz" -O "$tmp"
-  tar -C "$fonts_dir" -xJf "$tmp" --wildcards '*.ttf'
-  rm -f "$tmp"
-  log_info "Nerd Fonts Symbols installed."
-}
-
+# $@: optional list of packages to run setup for (empty = all)
 configure() {
-  log_info "Configuring..."
-  setup_fish_shell
-  setup_nvim_plugins
-  setup_uv_venv "$HOME/.local/share/venv/base"        ipython pipx
-  setup_uv_venv "$HOME/.local/share/nvim/venv"        pynvim
-  setup_fonts
+  local filter=("$@")
+  log_info "Running setup hooks..."
+
+  local run_for=()
+  if [[ ${#filter[@]} -gt 0 ]]; then
+    run_for=("${filter[@]}")
+  else
+    local pkg_conf
+    for pkg_conf in "$DOTFILES"/*/package.conf; do
+      [[ -f "$pkg_conf" ]] || continue
+      run_for+=("$(basename "$(dirname "$pkg_conf")")")
+    done
+  fi
+
+  local pkg
+  for pkg in "${run_for[@]}"; do
+    local pkg_conf="$DOTFILES/$pkg/package.conf"
+    [[ -f "$pkg_conf" ]] || { log_warn "No package.conf for '$pkg', skipping setup."; continue; }
+    local TARGET=~/.config FORCE=false STOW_OPTS= SETUP=
+    # shellcheck source=/dev/null
+    source "$pkg_conf"
+    run_setup "$pkg" "$SETUP"
+  done
+
   log_info "Configuration complete."
 }
 
 # ── Neovim ────────────────────────────────────────────────────────────────────
 install_nvim() {
-  local os="$1"
-  if [[ "$os" != "linux" ]]; then
+  if command -v sw_vers &>/dev/null; then
     log_warn "Neovim install via update-nvim is Linux-only. Skipping."
     return
   fi
   local update_nvim="$HOME/.local/bin/update-nvim"
   if [[ ! -x "$update_nvim" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_dry "$update_nvim  (skipping: not yet installed)"
+      return
+    fi
     log_error "update-nvim not found at $update_nvim. Was the scripts package stowed?"
     exit 1
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    log_dry "$update_nvim"
+    return
   fi
   log_info "Installing neovim..."
   "$update_nvim"
   log_info "Neovim installed."
 }
 
+# ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [flags]
+Usage: $(basename "$0") [options]
 
-With no flags, runs all install steps.
+With no options, runs all install steps for all packages.
 
-Flags:
-  -p, --packages   Install system packages (apt / brew)
-  -s, --stow       Stow dotfiles into \$HOME
-  -m, --mise       Install mise and all tools
-  -n, --nvim       Install neovim (Linux only)
-  -c, --configure  Post-install configuration (plugins, shell, venvs, fonts)
-  -h, --help       Show this help
+Options:
+  -y [pkg...], --system [pkg...]   Install system packages via detected manager.
+                                   Optionally override the package list.
+  -p [pkg...], --package [pkg...]  Stow dotfile packages (symlink into place).
+                                   Optionally limit to specific packages.
+  -m,          --mise              Install mise and all tools via \`mise install\`.
+  -n,          --nvim              Install Neovim (Linux only).
+  -s [pkg...], --setup [pkg...]    Run per-package setup hooks (SETUP= in package.conf).
+                                   Optionally limit to specific packages.
+  -d,          --dry-run           Simulate: show what would happen without doing it.
+  -h,          --help              Show this help.
+
+Examples:
+  $(basename "$0")                        # full install
+  $(basename "$0") -d                     # dry-run of full install
+  $(basename "$0") -p fish git -s shell   # stow fish + git, run shell's setup hook
+  $(basename "$0") -y                     # install system packages from conf
+  $(basename "$0") -y stow curl wget      # install only stow, curl, wget
+  $(basename "$0") -m -n                  # install mise + tools + neovim
 EOF
 }
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 main() {
-  local os
-  os="$(detect_os)"
+  local os_name
+  os_name="$(get_pretty_os_name)"
 
-  local do_packages=false do_stow=false do_mise=false do_nvim=false do_configure=false
+  local do_system=false  system_pkgs=()
+  local do_stow=false    stow_pkgs=()
+  local do_mise=false
+  local do_nvim=false
+  local do_setup=false   setup_pkgs=()
   local any=false
 
+  # Parse flags, collecting optional trailing package args for each flag.
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -p|--packages)  do_packages=true;  any=true ;;
-      -s|--stow)      do_stow=true;      any=true ;;
-      -m|--mise)      do_mise=true;      any=true ;;
-      -n|--nvim)      do_nvim=true;      any=true ;;
-      -c|--configure) do_configure=true; any=true ;;
-      -h|--help)      usage; exit 0 ;;
-      *) log_error "Unknown flag: $1"; usage; exit 1 ;;
+      -y|--system)
+        do_system=true; any=true; shift
+        while [[ $# -gt 0 && "$1" != -* ]]; do system_pkgs+=("$1"); shift; done
+        ;;
+      -p|--package)
+        do_stow=true; any=true; shift
+        while [[ $# -gt 0 && "$1" != -* ]]; do stow_pkgs+=("$1"); shift; done
+        ;;
+      -m|--mise)
+        do_mise=true; any=true; shift
+        ;;
+      -n|--nvim)
+        do_nvim=true; any=true; shift
+        ;;
+      -s|--setup)
+        do_setup=true; any=true; shift
+        while [[ $# -gt 0 && "$1" != -* ]]; do setup_pkgs+=("$1"); shift; done
+        ;;
+      -d|--dry-run)
+        DRY_RUN=true; shift
+        ;;
+      -h|--help)
+        usage; exit 0
+        ;;
+      *)
+        log_error "Unknown option: $1"; usage; exit 1
+        ;;
     esac
-    shift
   done
 
   if [[ "$any" == false ]]; then
-    do_packages=true; do_stow=true; do_mise=true; do_nvim=true; do_configure=true
+    do_system=true; do_stow=true; do_mise=true; do_nvim=true; do_setup=true
   fi
 
-  log_info "Detected OS: $os"
-  [[ "$do_packages"  == true ]] && install_system_packages "$os"
-  [[ "$do_stow"      == true ]] && stow_all_packages
-  [[ "$do_mise"      == true ]] && { install_mise; install_tools; }
-  [[ "$do_nvim"      == true ]] && install_nvim "$os"
-  [[ "$do_configure" == true ]] && configure
+  [[ "$DRY_RUN" == true ]] && log_info "Dry-run mode — no changes will be made."
+  log_info "Detected OS: $os_name"
+
+  [[ "$do_system" == true ]] && install_system_packages "${system_pkgs[@]}"
+  [[ "$do_stow"   == true ]] && stow_all_packages       "${stow_pkgs[@]}"
+  [[ "$do_mise"   == true ]] && { install_mise; install_tools; }
+  [[ "$do_nvim"   == true ]] && install_nvim
+  [[ "$do_setup"  == true ]] && configure                "${setup_pkgs[@]}"
 }
 
 main "$@"

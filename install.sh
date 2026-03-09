@@ -47,13 +47,13 @@ install_system_packages() {
     unset DETECT COMMAND PACKAGES
     # shellcheck source=/dev/null
     source "$conf"
-    if eval "${DETECT:-false}" &>/dev/null; then
+    if command -v "${DETECT:-}" &>/dev/null; then
       local pkgs=("${override[@]:-${PACKAGES[@]}}")
       log_info "Installing system packages via: $COMMAND"
       if [[ "$DRY_RUN" == true ]]; then
         log_dry "$COMMAND ${pkgs[*]}"
       else
-        eval "$COMMAND ${pkgs[*]@Q}"
+        $COMMAND "${pkgs[*]@Q}"
       fi
       log_info "System packages installed."
       return 0
@@ -107,10 +107,10 @@ run_setup() {
     fi
   else
     if [[ "$DRY_RUN" == true ]]; then
-      log_dry "eval: $setup  (setup for $pkg)"
+      log_dry "bash -c: $setup  (setup for $pkg)"
     else
       log_step "Running setup for $pkg: $setup"
-      eval "$setup"
+      bash -c "$setup"
     fi
   fi
 }

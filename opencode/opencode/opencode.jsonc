@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-gemini-auth@latest",
+    "@plannotator/opencode@latest",
+  ],
+  "small_model": "google/gemini-3-flash-preview",
+}

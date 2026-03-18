@@ -28,7 +28,6 @@ abbr --add tls 'tmux ls'
 abbr --add tns 'tmux new -s'
 abbr --add tat 'tmux attach -t'
 abbr --add oc 'opencode'
-abbr --add --set-cursor ai 'opencode -p "%"'
 
 if string match -rq -- "kitty" "$TERM"
   abbr --add ssh 'kitty +kitten ssh'

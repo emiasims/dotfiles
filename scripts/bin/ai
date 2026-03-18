@@ -1,0 +1,44 @@
+#!/bin/bash
+
+if [ -z "$GEMINI_API_KEY" ]; then
+  SECRETS_FILE="$HOME/.config/secrets/gemini.key"
+  if [ -f "$SECRETS_FILE" ]; then
+    GEMINI_API_KEY=$(<"$SECRETS_FILE" xargs)
+  else
+    echo "Error: GEMINI_API_KEY is not set and $SECRETS_FILE was not found." >&2
+    exit 1
+  fi
+fi
+
+USER_PROMPT="$1"
+
+# The context now includes few-shot examples to enforce behavior
+CONTEXT="You are a CLI assistant. Return ONLY the raw terminal command. Do not use markdown formatting, backticks, or provide explanations.
+
+Examples:
+User: drop last commit, keep changes
+Command: git reset --soft HEAD~1
+
+User: drop last commit, discard changes
+Command: git reset --hard HEAD~1"
+
+# Build the JSON payload
+PAYLOAD=$(jq -n \
+  --arg ctx "$CONTEXT" \
+  --arg prompt "$USER_PROMPT" \
+  '{
+    systemInstruction: { parts: [{ text: $ctx }] },
+    contents: [{ parts: [{ text: $prompt }] }]
+  }'
+)
+
+MODEL="gemini-3.1-flash-lite-preview"
+
+# Call the Gemini API (Updated to standard gemini-2.5-flash)
+RESPONSE=$(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD" \
+  "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}")
+
+# Extract the text and strip trailing newlines
+echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' | sed -e '$a\'

@@ -9,5 +9,3 @@ fi
 echo "Syncing Neovim plugins..."
 "$nvim_bin" --headless "+Lazy! sync" +qa
 echo "Neovim plugins synced."
-
-ln -sfn "$HOME/.config/nvim" "$HOME/.vim"

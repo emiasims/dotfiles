@@ -4,4 +4,14 @@
     "opencode-gemini-auth@latest",
     "@plannotator/opencode@latest",
   ],
+  "agent": {
+    "general": {
+      "model": "opencode/kimi-k2.5",
+      "temperature": 1.0,
+    },
+    "explore": {
+      "model": "opencode/kimi-k2.5",
+      "temperature": 1.0,
+    },
+  }
 }

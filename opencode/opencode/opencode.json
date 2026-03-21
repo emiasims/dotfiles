@@ -3,6 +3,5 @@
   "plugin": [
     "opencode-gemini-auth@latest",
     "@plannotator/opencode@latest",
-    "superpowers@git+https://github.com/obra/superpowers.git",
   ],
 }

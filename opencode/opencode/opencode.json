@@ -1,17 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "opencode-gemini-auth@latest",
-    "@plannotator/opencode@latest",
   ],
+  "small_model": "opencode/kimi-k2.5",
   "agent": {
-    "general": {
-      "model": "opencode/kimi-k2.5",
-      "temperature": 1.0,
-    },
     "explore": {
-      "model": "opencode/kimi-k2.5",
-      "temperature": 1.0,
+      "model": "opencode/claude-haiku-4-5",
     },
   }
 }

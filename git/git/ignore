@@ -8,3 +8,6 @@ tmp*
 .aider*
 .worktrees
 **/.claude/settings.local.json
+opencode.json
+opencode.jsonc
+.opencode

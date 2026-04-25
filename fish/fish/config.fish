@@ -7,12 +7,15 @@ set -x LESS_TERMCAP_ue (printf "\033[0m")          # end underline
 set -x LESS_TERMCAP_us (printf "\033[01;32m")      # begin underline
 
 set -gx EDITOR nvim
+set -gx OPENCODE_EXPERIMENTAL_PLAN_MODE 1
+set -gx OPENCODE_ENABLE_EXA 1
 
 fish_add_path -g ~/.local/bin
 fish_add_path -g ~/local/bin
 fish_add_path -g ~/bin
 fish_add_path -g ./node_modules/.bin
 fish_add_path -g ~/.cargo/bin
+fish_add_path -g ~/.local/share/mise/shims
 
 fish_vi_key_bindings
 

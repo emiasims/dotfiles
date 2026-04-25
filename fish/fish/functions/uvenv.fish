@@ -7,6 +7,7 @@ function __venv_exists -V venv_dirs -a name
 end
 
 function uvenv-create -V venv_dirs -a name
+  test -z "$name" && set name (basename $PWD)
   set env_path "$venv_dirs/$name"
 
   fcolor comment

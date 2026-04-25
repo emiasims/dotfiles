@@ -11,3 +11,5 @@ tmp*
 opencode.json
 opencode.jsonc
 .opencode
+.venv
+MEMORIES.md

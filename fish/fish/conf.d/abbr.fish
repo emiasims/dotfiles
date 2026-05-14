@@ -48,9 +48,10 @@ abbr --add gdc 'git diff --cached'
 abbr --add gwd 'git diff --color-words'
 abbr --add grh 'git reset HEAD --'
 abbr --add gcim 'git commit -m'
+abbr --add gca 'git commit --amend'
 abbr --add gbr 'git branch'
 abbr --add gco 'git checkout'
-abbr --add grih 'git rebase -i (git rev-parse --short origin/HEAD)'
+abbr --add grim 'git rebase -i (git rev-parse --short origin/main 2>/dev/null; or echo --root)'
 abbr --add glo 'git log --all --oneline --decorate --graph -n 20'
 
 # config defined in functions

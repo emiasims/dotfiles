@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 pyscript="
 from numpy import *
-out = "$@"
+out = $@
 try:
   print(*out, sep='\n')
 except:
   print(out)
 "
-python -c $pyscript
+python -c "$pyscript"

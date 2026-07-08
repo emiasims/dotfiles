@@ -1,44 +1,88 @@
 #!/bin/bash
+set -euo pipefail
 
-if [ -z "$GEMINI_API_KEY" ]; then
-  SECRETS_FILE="$HOME/.config/secrets/gemini.key"
-  if [ -f "$SECRETS_FILE" ]; then
-    GEMINI_API_KEY=$(<"$SECRETS_FILE" xargs)
-  else
-    echo "Error: GEMINI_API_KEY is not set and $SECRETS_FILE was not found." >&2
-    exit 1
-  fi
-fi
+usage() {
+  cat <<'EOF'
+Usage: ai [-c] [-u] [-m model] [prompt...]
 
-USER_PROMPT="$1"
+Modes:
+  (default)   General question — answer written to stdout
+  -c          CLI mode — returns only a raw terminal command
 
-# The context now includes few-shot examples to enforce behavior
-CONTEXT="You are a CLI assistant. Return ONLY the raw terminal command. Do not use markdown formatting, backticks, or provide explanations.
+Options:
+  -u          Unsafe — enable bash and file-writing tools
+  -m MODEL    Override model (passed to pi)
+  -h          Show this help
 
 Examples:
-User: drop last commit, keep changes
-Command: git reset --soft HEAD~1
+  ai "What is a POSIX signal?"
+  ai -c "find all typescript files modified today"
+  ai -c -u "run the test suite and show failures"
+EOF
+  exit 0
+}
 
-User: drop last commit, discard changes
-Command: git reset --hard HEAD~1"
+cli_mode=false
+unsafe=false
+model=""
 
-# Build the JSON payload
-PAYLOAD=$(jq -n \
-  --arg ctx "$CONTEXT" \
-  --arg prompt "$USER_PROMPT" \
-  '{
-    systemInstruction: { parts: [{ text: $ctx }] },
-    contents: [{ parts: [{ text: $prompt }] }]
-  }'
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c) cli_mode=true; shift ;;
+    -u) unsafe=true; shift ;;
+    -m) model="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+prompt="$*"
+if [[ -z "$prompt" ]]; then
+  echo "Error: no prompt provided" >&2
+  exit 1
+fi
+
+args=(
+  -p
+  --no-session
+  --no-context-files
+  --no-extensions
+  --no-skills
+  --no-prompt-templates
+  --no-themes
 )
 
-MODEL="gemini-3.1-flash-lite-preview"
+[[ -n "$model" ]] && args+=(--model "$model")
 
-# Call the Gemini API (Updated to standard gemini-2.5-flash)
-RESPONSE=$(curl -s -X POST \
-  -H "Content-Type: application/json" \
-  -d "$PAYLOAD" \
-  "https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}")
+if [[ "$unsafe" == false ]]; then
+  args+=(--tools read,grep,find,ls)
+fi
 
-# Extract the text and strip trailing newlines
-echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty' | sed -e '$a\'
+if [[ "$cli_mode" == true ]]; then
+  args+=(--thinking off)
+  args+=(--system-prompt "
+You translate natural language descriptions into shell commands. The user
+describes what they want to accomplish and you respond with the exact command to
+run. Return ONLY the raw command — no markdown, no backticks, no code fences, no
+explanations, no commentary, no prefixes like 'Command:'. Just the command
+itself, nothing else.
+")
+  cmd=$(pi "${args[@]}" "$prompt")
+  # trim leading newlines (trailing ones are already stripped by $())
+  cmd="${cmd#"${cmd%%[!$'\n']*}"}"
+  printf '%s\n' "$cmd"
+  printf 'Execute? [y/N] ' >&2
+  read -r answer </dev/tty
+  if [[ "$answer" == [yY] ]]; then
+    eval "$cmd"
+  fi
+else
+  args+=(--system-prompt "
+You are a helpful terminal assistant. The user is reading your response in
+a terminal. Be concise. Use plain text by default; use markdown code blocks only
+when showing code snippets.
+")
+  exec pi "${args[@]}" "$prompt"
+fi

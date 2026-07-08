@@ -1,0 +1,6 @@
+#!/bin/sh
+if command -v wsl-notify >/dev/null 2>&1; then
+    exec wsl-notify "$1" "${2:- }"
+else
+    exec notify-send "$@"
+fi

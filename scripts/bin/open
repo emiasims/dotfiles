@@ -1,0 +1,6 @@
+#!/bin/sh
+if command -v wsl-open >/dev/null 2>&1; then
+    exec wsl-open "$@"
+else
+    exec /usr/bin/open "$@"
+fi

@@ -16,11 +16,9 @@ abbr --add path 'string replace --all : \n "$PATH"'
 abbr --add du 'du -sh'
 abbr --add crontab 'VIM_CRONTAB=true crontab'
 abbr --add vi 'nvim'
+abbr --add vip 'nvim -p'
 abbr --add vid 'nvim-dev'
-abbr --add vif 'nvim +"Telescope fd"'
-abbr --add vis 'nvim -S (git rev-parse --show-toplevel)/Session.vim'
-abbr --add nev 'nvim'
-abbr --add nevs 'nvim -S (git rev-parse --show-toplevel)/Session.vim'
+abbr --add vif 'nvim +"Pick files"'
 abbr --add please 'sudo'
 abbr --add np 'numpy'
 abbr --add wget 'wget'
@@ -53,6 +51,7 @@ abbr --add gbr 'git branch'
 abbr --add gco 'git checkout'
 abbr --add grim 'git rebase -i (git rev-parse --short origin/main 2>/dev/null; or echo --root)'
 abbr --add glo 'git log --all --oneline --decorate --graph -n 20'
+abbr --add gdf 'git diff --name-only --cached --diff-filter=AM'
 
 # config defined in functions
 abbr --add cst 'config status'
@@ -73,3 +72,6 @@ abbr --add clo 'config log --all --oneline --decorate --graph -n 20'
 abbr --add pd prevd
 abbr --add nd nextd
 abbr --add cdp 'cd (git rev-parse --show-toplevel)'
+
+abbr --add ecf 'nvim +"Pick files cwd=~/dotfiles"'
+abbr --add ev  'nvim +"Pick files cwd=~/.config/nvim"'

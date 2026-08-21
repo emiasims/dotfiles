@@ -7,14 +7,9 @@ tags
 tmp*
 .aider*
 .worktrees
-**/.claude/settings.local.json
 opencode.json
 opencode.jsonc
 .opencode
 .venv
-MEMORIES.md
-prompt.md
-.prompt.md
-claude
 .claude
 notes.md

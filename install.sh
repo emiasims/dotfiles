@@ -87,10 +87,12 @@ stow_package() {
   local pkg="$1"
   local target="${2:-$HOME}"
   local extra_ignore="${3:-}"
+  local extra_opts="${4:-}"
   [[ -d "$DOTFILES/$pkg" ]] || { log_warn "Package '$pkg' not found, skipping."; return; }
   log_step "Stowing $pkg -> $target..."
   local stow_args=(-R --ignore='package\.conf')
   [[ -n "$extra_ignore" ]] && stow_args+=(--ignore="$extra_ignore")
+  [[ -n "$extra_opts" ]] && stow_args+=("$extra_opts")
   [[ "$DRY_RUN" == true ]] && stow_args+=(--simulate)
   stow "${stow_args[@]}" -d "$DOTFILES" -t "$target" "$pkg"
 }
@@ -134,7 +136,7 @@ stow_one() {
   local setup_ignore=
   [[ -n "$SETUP" && -f "$DOTFILES/$pkg/$SETUP" ]] && setup_ignore="$SETUP"
 
-  stow_package "$pkg" "$target" "$setup_ignore"
+  stow_package "$pkg" "$target" "$setup_ignore" "$STOW_OPTS"
   run_setup "$pkg" "$SETUP"
 }
 

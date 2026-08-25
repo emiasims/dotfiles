@@ -75,3 +75,4 @@ abbr --add cdp 'cd (git rev-parse --show-toplevel)'
 
 abbr --add ecf 'nvim +"Pick files cwd=~/dotfiles"'
 abbr --add ev  'nvim +"Pick files cwd=~/.config/nvim"'
+abbr --add --set-cursor aic 'ai -c "%"'

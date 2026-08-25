@@ -3,86 +3,220 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ai [-c] [-u] [-m model] [prompt...]
+Usage: ai [-c] [-n] [-p] [-r|-u] [-m model] [prompt...]
 
 Modes:
   (default)   General question — answer written to stdout
   -c          CLI mode — returns only a raw terminal command
 
 Options:
-  -u          Unsafe — enable bash and file-writing tools
-  -m MODEL    Override model (passed to pi)
+  -n          With -c, print the command and skip the execute prompt
+  -p          Route through pi instead of one curl to Gemini
+  -r          pi with read-only tools — read, grep, find, ls
+  -u          pi with read-only tools plus bash, edit, write
+  -m MODEL    Override model
   -h          Show this help
+
+By default this is a single curl to Gemini with no tools. -r and -u imply -p.
 
 Examples:
   ai "What is a POSIX signal?"
-  ai -c "find all typescript files modified today"
+  ai -c "drop the last commit but keep the changes"
+  ai -c -r "show the largest files in this repo"
   ai -c -u "run the test suite and show failures"
 EOF
   exit 0
 }
 
-cli_mode=false
-unsafe=false
-model=""
+readonly_tools="read,grep,find,ls"
+unsafe_tools="$readonly_tools,bash,edit,write"
+gemini_model="gemini-3.7-flash"
+gemini_cli_model="gemini-flash-lite-latest"
+gemini_key_file="$HOME/.config/secrets/gemini.key"
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -c) cli_mode=true; shift ;;
-    -u) unsafe=true; shift ;;
-    -m) model="$2"; shift 2 ;;
-    -h|--help) usage ;;
-    --) shift; break ;;
-    -*) echo "Unknown option: $1" >&2; exit 1 ;;
-    *) break ;;
-  esac
-done
-
-prompt="$*"
-if [[ -z "$prompt" ]]; then
-  echo "Error: no prompt provided" >&2
-  exit 1
-fi
-
-args=(
-  -p
-  --no-session
-  --no-context-files
-  --no-extensions
-  --no-skills
-  --no-prompt-templates
-  --no-themes
-)
-
-[[ -n "$model" ]] && args+=(--model "$model")
-
-if [[ "$unsafe" == false ]]; then
-  args+=(--tools read,grep,find,ls)
-fi
-
-if [[ "$cli_mode" == true ]]; then
-  args+=(--thinking off)
-  args+=(--system-prompt "
+cli_system="
 You translate natural language descriptions into shell commands. The user
 describes what they want to accomplish and you respond with the exact command to
 run. Return ONLY the raw command — no markdown, no backticks, no code fences, no
 explanations, no commentary, no prefixes like 'Command:'. Just the command
 itself, nothing else.
-")
-  cmd=$(pi "${args[@]}" "$prompt")
+"
+
+cli_examples="
+Examples:
+User: drop last commit, keep changes
+Command: git reset --soft HEAD~1
+
+User: drop last commit, discard changes
+Command: git reset --hard HEAD~1
+"
+
+general_system="
+You are a helpful terminal assistant. The user is reading your response in
+a terminal. Be concise. Use plain text by default; use markdown code blocks only
+when showing code snippets.
+"
+
+gemini() {
+  local system="$1" user="$2"
+  local key payload text="" err="" line delta detail
+
+  [[ -z "${GEMINI_API_KEY:-}" && ! -f "$gemini_key_file" ]] && return 1
+  key="${GEMINI_API_KEY:-$(cat "$gemini_key_file")}"
+
+  payload=$(jq -n --arg ctx "$system" --arg prompt "$user" '{
+    systemInstruction: { parts: [{ text: $ctx }] },
+    contents: [{ parts: [{ text: $prompt }] }]
+  }')
+
+  while IFS= read -r line; do
+    if [[ "$line" != data:\ * ]]; then
+      err+="$line"$'\n'
+      continue
+    fi
+    delta=$(printf '%s' "${line#data: }" |
+      jq -j '.candidates[0].content.parts[0].text // empty' 2>/dev/null) || continue
+    [[ -n "$delta" ]] || continue
+    text+="$delta"
+    [[ -z "$progress" ]] || printf '%s' "$delta" >"$progress"
+  done < <(curl -sS -N -X POST \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "https://generativelanguage.googleapis.com/v1beta/models/${gemini_model}:streamGenerateContent?alt=sse&key=${key}")
+
+  if [[ -z "$text" ]]; then
+    echo "Error: no response from $gemini_model" >&2
+    # an HTTP error arrives as a plain JSON body rather than as SSE frames
+    detail=$(printf '%s' "$err" | jq -r '.error.message // empty' 2>/dev/null) || detail=""
+    [[ -z "$detail" ]] || echo "$detail" >&2
+    return 1
+  fi
+
+  if [[ "$progress" == /dev/stdout ]]; then
+    printf '\n'
+    return
+  fi
+  if [[ "$progress" == /dev/tty ]]; then
+    printf '\r\e[2K' >/dev/tty
+  fi
+  printf '%s\n' "$text"
+}
+
+run() {
+  local system="$1"
+
+  if [[ "$use_pi" == false ]]; then
+    # exits if gemini is successful. Uses pi if not
+    gemini "$system" "$prompt" && return
+  fi
+
+  local args=(
+    -p
+    --no-session
+    --no-context-files
+    --no-extensions
+    --no-skills
+    --no-prompt-templates
+    --no-themes
+    --system-prompt "$system"
+  )
+  [[ -z "$model" ]] || args+=(--model "$model")
+  [[ "$cli_mode" == false ]] || args+=(--thinking off)
+  if [[ -n "$tools" ]]; then
+    args+=(--tools "$tools")
+  else
+    args+=(--no-tools)
+  fi
+
+  pi "${args[@]}" "$prompt"
+}
+
+parse_args() {
+  cli_mode=false
+  no_exec=false
+  use_pi=false
+  tools=""
+  model=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -c) cli_mode=true; shift ;;
+      -n) no_exec=true; shift ;;
+      -p) use_pi=true; shift ;;
+      -r) use_pi=true; tools="$readonly_tools"; shift ;;
+      -u) use_pi=true; tools="$unsafe_tools"; shift ;;
+      -m) model="$2"; shift 2 ;;
+      -h|--help) usage ;;
+      --) shift; break ;;
+      -*) echo "Unknown option: $1" >&2; exit 1 ;;
+      *) break ;;
+    esac
+  done
+
+  prompt="$*"
+  if [[ -z "$prompt" ]]; then
+    echo "Error: no prompt provided" >&2
+    exit 1
+  fi
+}
+
+configure() {
+  system="$general_system"
+  if [[ "$cli_mode" == true ]]; then
+    system="$cli_system"
+  fi
+
+  if [[ "$use_pi" == false ]]; then
+    if [[ -n "$model" ]]; then
+      gemini_model="$model"
+    elif [[ "$cli_mode" == true ]]; then
+      gemini_model="$gemini_cli_model"
+      # no tool call to ground it, so show the shape of the answer instead
+      system+="$cli_examples"
+    fi
+  fi
+
+  progress=""
+  if [[ "$cli_mode" == true ]]; then
+    # -c output is captured and printed once, so the render goes to the terminal
+    # and is erased when the answer is complete. Test by writing: under a daemon
+    # /dev/tty exists but is not connected, so -w says yes and open fails.
+    if { : >/dev/tty; } 2>/dev/null; then
+      progress=/dev/tty
+    fi
+  elif [[ -t 1 ]]; then
+    progress=/dev/stdout
+  fi
+}
+
+run_cli() {
+  local cmd answer
+
+  cmd=$(run "$system")
   # trim leading newlines (trailing ones are already stripped by $())
-  cmd="${cmd#"${cmd%%[!$'\n']*}"}"
+  while [[ "$cmd" == $'\n'* ]]; do
+    cmd="${cmd#$'\n'}"
+  done
   printf '%s\n' "$cmd"
+
+  [[ "$no_exec" == false ]] || return 0
+
   printf 'Execute? [y/N] ' >&2
   read -r answer </dev/tty
   if [[ "$answer" == [yY] ]]; then
     eval "$cmd"
   fi
-else
-  args+=(--system-prompt "
-You are a helpful terminal assistant. The user is reading your response in
-a terminal. Be concise. Use plain text by default; use markdown code blocks only
-when showing code snippets.
-")
-  exec pi "${args[@]}" "$prompt"
-fi
+}
+
+main() {
+  parse_args "$@"
+  configure
+
+  if [[ "$cli_mode" == true ]]; then
+    run_cli
+  else
+    run "$system"
+  fi
+}
+
+main "$@"

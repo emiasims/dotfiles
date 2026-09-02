@@ -31,6 +31,9 @@ bind -M insert \e\[13\;2u insert-line-under
 # C-Cr, add line above current line
 bind -M insert \e\[13\;5u insert-line-over
 
+bind -M insert super-left beginning-of-line
+bind -M insert super-right end-of-line
+
 if test -n "$WSL_DISTRO_NAME"
   set -gx COLORTERM truecolor
 end

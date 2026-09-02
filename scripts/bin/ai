@@ -184,7 +184,7 @@ configure() {
     if { : >/dev/tty; } 2>/dev/null; then
       progress=/dev/tty
     fi
-  elif [[ -t 1 ]]; then
+  else
     progress=/dev/stdout
   fi
 }

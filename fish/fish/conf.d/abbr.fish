@@ -50,8 +50,8 @@ abbr --add gca 'git commit --amend'
 abbr --add gbr 'git branch'
 abbr --add gco 'git checkout'
 abbr --add grim 'git rebase -i (git rev-parse --short origin/main 2>/dev/null; or echo --root)'
-abbr --add glo 'git log --oneline --decorate --graph -n 20'
-abbr --add gloa 'git log --all --oneline --decorate --graph -n 20'
+abbr --add glo 'git log --all --oneline --decorate --graph -n 20'
+abbr --add glb 'git log --oneline --decorate --graph -n 20'
 abbr --add gdf 'git diff --name-only --cached --diff-filter=AM'
 
 # config defined in functions

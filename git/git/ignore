@@ -7,9 +7,11 @@ tags
 tmp*
 .aider*
 .worktrees
+worktrees
 opencode.json
 opencode.jsonc
 .opencode
 .venv
 .claude
 notes.md
+.DS_Store

@@ -1,0 +1,370 @@
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s nullglob
+shopt -s globstar 2>/dev/null || true
+
+usage() {
+  cat <<'EOF'
+Usage: git ignore [scope] [command] [args...]
+
+Commands:
+  show            Print the target ignore file (default)
+  add PATTERN...  Append entries to the target
+  rm PATTERN...   Remove exactly-matching entries from the target
+  mv ENTRY...     Move an entry from wherever it lives to a scope
+  ls [PATH...]    List ignored files in the tree (alias: ls-files)
+
+Scope (which file to target; default is the nearest .gitignore):
+  -g, --global    core.excludesFile, else ~/.config/git/ignore
+  -l, --local     .git/info/exclude
+      --root      the repo root .gitignore
+  -p, --path ARG  ARG/.gitignore if ARG is a dir, else ARG itself
+
+Options:
+  -r, --resolve   Treat add/rm args as shell globs; write each match as a
+                  path anchored to the target file's directory
+  -n, --dry-run   Show what would change, write nothing
+  -a, --all       ls: list every file, do not collapse directories
+  -v, --verbose   ls: append the source:line that ignores each path
+  -h, --help      Show this help
+
+Examples:
+  git ignore                     show the nearest .gitignore
+  git ignore add '*.log' tmp/    ignore a pattern and a directory
+  git ignore add -r build/*.o    ignore matched files by explicit path
+  git ignore -g add .DS_Store    add to the global ignore
+  git ignore mv -g node_modules  move an entry into the global ignore
+  git ignore ls -v               list ignored files with attribution
+EOF
+  exit 0
+}
+
+die()  { printf '%s\n' "$*" >&2; exit 1; }
+warn() { printf '%s\n' "$*" >&2; }
+
+set_scope() {
+  [[ -z "$scope" ]] || die "conflicting scope flags: $scope and $1"
+  scope="$1"; scope_arg="$2"
+}
+
+# split short-option clusters (-nr -> -n -r); a value-taker keeps the rest as
+# its argument (-p., -np -> -n -p)
+expand_args() {
+  EXPANDED=()
+  local a rest c val nomore=0
+  for a in "$@"; do
+    if [[ $nomore -eq 1 || "$a" != -* || "$a" == "-" || "$a" == --* || ${#a} -le 2 ]]; then
+      EXPANDED+=("$a")
+      [[ "$a" == "--" ]] && nomore=1
+      continue
+    fi
+    rest="${a#-}"
+    while [[ -n "$rest" ]]; do
+      c="${rest:0:1}"
+      if [[ "$c" == "p" ]]; then
+        val="${rest:1}"
+        [[ -n "$val" ]] && EXPANDED+=("-p$val") || EXPANDED+=("-p")
+        rest=""
+      else
+        EXPANDED+=("-$c"); rest="${rest:1}"
+      fi
+    done
+  done
+}
+
+collect() {
+  if [[ -z "$verb" ]]; then verb="$1"; else operands+=("$1"); fi
+}
+
+parse_args() {
+  scope=""; scope_arg=""
+  resolve=false; dry_run=false; all=false; verbose=false
+  verb=""; operands=()
+
+  expand_args "$@"
+  set -- ${EXPANDED[@]+"${EXPANDED[@]}"}
+
+  local nomore=0
+  while [[ $# -gt 0 ]]; do
+    if [[ $nomore -eq 1 ]]; then collect "$1"; shift; continue; fi
+    case "$1" in
+      --)           nomore=1; shift ;;
+      -g|--global)  set_scope global ""; shift ;;
+      -l|--local)   set_scope local  ""; shift ;;
+      --root)       set_scope root   ""; shift ;;
+      -p|--path)    [[ $# -ge 2 ]] || die "option $1 needs an argument"
+                    set_scope path "$2"; shift 2 ;;
+      -p*)          set_scope path "${1#-p}"; shift ;;
+      --path=*)     set_scope path "${1#--path=}"; shift ;;
+      -r|--resolve) resolve=true; shift ;;
+      -n|--dry-run) dry_run=true; shift ;;
+      -a|--all)     all=true; shift ;;
+      -v|--verbose) verbose=true; shift ;;
+      -h|--help)    usage ;;
+      -*)           die "unknown option: $1" ;;
+      *)            collect "$1"; shift ;;
+    esac
+  done
+}
+
+# sets TARGET (not echoed) so a not-a-repo failure aborts with git's own
+# message instead of being swallowed by a command substitution
+resolve_target() {
+  local f top
+  case "$scope" in
+    global)
+      f=$(git config --get core.excludesFile 2>/dev/null || true)
+      [[ -n "$f" ]] || f="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
+      TARGET="${f/#\~/$HOME}"
+      ;;
+    local) TARGET=$(git rev-parse --git-path info/exclude) ;;
+    root)  top=$(git rev-parse --show-toplevel); TARGET="$top/.gitignore" ;;
+    path)
+      if [[ -d "$scope_arg" ]]; then TARGET="${scope_arg%/}/.gitignore"
+      else TARGET="$scope_arg"; fi
+      ;;
+    *) nearest_ignore ;;
+  esac
+}
+
+nearest_ignore() {
+  local root dir
+  root=$(git rev-parse --show-toplevel)
+  dir=$PWD
+  while :; do
+    [[ -f "$dir/.gitignore" ]] && { TARGET="$dir/.gitignore"; return; }
+    [[ "$dir" -ef "$root" || "$dir" == "/" ]] && break
+    dir=$(dirname "$dir")
+  done
+  TARGET="$root/.gitignore"
+}
+
+# every ignore file mv might pull an entry out of: global, local exclude, and
+# each .gitignore from cwd up to the repo root
+candidate_files() {
+  local f root dir
+  f=$(git config --get core.excludesFile 2>/dev/null || true)
+  [[ -n "$f" ]] || f="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
+  printf '%s\n' "${f/#\~/$HOME}"
+  git rev-parse --git-path info/exclude 2>/dev/null || true
+  root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  [[ -n "$root" ]] || return 0
+  dir=$PWD
+  while :; do
+    printf '%s/.gitignore\n' "$dir"
+    [[ "$dir" -ef "$root" || "$dir" == "/" ]] && break
+    dir=$(dirname "$dir")
+  done
+}
+
+# physical directory holding the target file, for anchoring -r entries
+target_base() {
+  cd -P -- "$(dirname -- "$1")" && pwd -P
+}
+
+# escape gitignore metacharacters so a literal path reads as itself
+escape_entry() {
+  local s="$1" trail=""
+  s="${s//\\/\\\\}"
+  s="${s//\*/\\*}"
+  s="${s//\?/\\?}"
+  s="${s//\[/\\[}"
+  case "$s" in
+    '#'*|'!'*) s="\\$s" ;;
+  esac
+  while [[ "$s" == *' ' ]]; do trail=" $trail"; s="${s% }"; done
+  printf '%s' "$s${trail// /\\ }"
+}
+
+report_ignored() {
+  local info
+  info=$(git check-ignore -v -- "$1" 2>/dev/null || true)
+  warn "already ignored: ${info:-$1}"
+}
+
+ensure_trailing_newline() {
+  [[ -s "$1" ]] || return 0
+  [[ -n "$(tail -c1 -- "$1")" ]] && printf '\n' >>"$1" || true
+}
+
+# expand each glob operand into anchored, escaped entries in TO_WRITE.
+# filter=true (add) drops tracked and already-ignored matches; filter=false
+# (rm) keeps every match so its exact line can be removed.
+resolve_entries() {
+  local filter="$1" explicit="$2" base op match abs rel entry
+  base=$(target_base "$target")
+  for op in "${operands[@]}"; do
+    local savedifs="$IFS"; IFS=; local matches=($op); IFS="$savedifs"
+    if [[ ${#matches[@]} -eq 0 ]]; then warn "no match: $op"; continue; fi
+    for match in "${matches[@]}"; do
+      abs="$(cd -P -- "$(dirname -- "$match")" && pwd -P)/$(basename -- "$match")"
+      rel="${abs#"$base"/}"
+      if [[ "$rel" == "$abs" ]]; then warn "skip (outside $base): $match"; continue; fi
+      if $filter; then
+        if git ls-files --error-unmatch -- "$match" >/dev/null 2>&1; then
+          warn "skip (tracked; git rm --cached to untrack): $match"; continue
+        fi
+        if ! $explicit && git check-ignore -q -- "$match"; then
+          report_ignored "$match"; continue
+        fi
+      fi
+      entry="/$(escape_entry "$rel")"
+      [[ -d "$match" ]] && entry="${entry%/}/"
+      TO_WRITE+=("$entry")
+    done
+  done
+}
+
+remove_lines() {
+  local target="$1"; shift
+  local tmp args=() e
+  tmp=$(mktemp)
+  for e in "$@"; do args+=(-e "$e"); done
+  grep -vxF "${args[@]}" -- "$target" >"$tmp" || true
+  cat "$tmp" >"$target"
+  rm "$tmp"
+}
+
+ignore_show() {
+  local target; resolve_target; target="$TARGET"
+  [[ -f "$target" ]] || die "no such ignore file: $target"
+  cat -- "$target"
+}
+
+ignore_add() {
+  [[ ${#operands[@]} -gt 0 ]] || { printf 'Nothing specified, nothing added.\n'; return 0; }
+  local target explicit=false op e
+  resolve_target; target="$TARGET"
+  [[ -n "$scope" ]] && explicit=true
+
+  TO_WRITE=()
+  if $resolve; then
+    resolve_entries true "$explicit"
+  else
+    for op in "${operands[@]}"; do
+      if ! $explicit && git check-ignore -q -- "$op" 2>/dev/null; then
+        report_ignored "$op"; continue
+      fi
+      TO_WRITE+=("$op")
+    done
+  fi
+  [[ ${#TO_WRITE[@]} -gt 0 ]] || return 0
+
+  local kept=()
+  for e in "${TO_WRITE[@]}"; do
+    if [[ -f "$target" ]] && grep -qxF -e "$e" -- "$target"; then
+      warn "already present ($target): $e"
+    else
+      kept+=("$e")
+    fi
+  done
+  [[ ${#kept[@]} -gt 0 ]] || return 0
+
+  if $dry_run; then
+    for e in "${kept[@]}"; do printf 'would add (%s): %s\n' "$target" "$e"; done
+    return 0
+  fi
+
+  ensure_trailing_newline "$target"
+  for e in "${kept[@]}"; do
+    printf '%s\n' "$e" >>"$target"
+    printf 'add (%s): %s\n' "$target" "$e"
+  done
+}
+
+ignore_rm() {
+  [[ ${#operands[@]} -gt 0 ]] || { printf 'Nothing specified, nothing removed.\n'; return 0; }
+  local target e
+  resolve_target; target="$TARGET"
+  [[ -f "$target" ]] || die "no such ignore file: $target"
+
+  local entries=()
+  if $resolve; then
+    TO_WRITE=(); resolve_entries false false; entries=( ${TO_WRITE[@]+"${TO_WRITE[@]}"} )
+  else
+    entries=( "${operands[@]}" )
+  fi
+
+  local removed=() missing=()
+  for e in ${entries[@]+"${entries[@]}"}; do
+    if grep -qxF -e "$e" -- "$target"; then removed+=("$e"); else missing+=("$e"); fi
+  done
+
+  if [[ ${#removed[@]} -gt 0 ]]; then
+    if $dry_run; then
+      for e in "${removed[@]}"; do printf 'would remove (%s): %s\n' "$target" "$e"; done
+    else
+      remove_lines "$target" "${removed[@]}"
+      for e in "${removed[@]}"; do printf 'remove (%s): %s\n' "$target" "$e"; done
+    fi
+  fi
+  for e in ${missing[@]+"${missing[@]}"}; do
+    warn "not in $target: $e"
+    local info; info=$(git check-ignore -v -- "$e" 2>/dev/null || true)
+    [[ -n "$info" ]] && warn "  ignored by: $info" || true
+  done
+  [[ ${#missing[@]} -eq 0 ]] || exit 1
+}
+
+ignore_mv() {
+  [[ ${#operands[@]} -gt 0 ]] || { printf 'Nothing specified, nothing moved.\n'; return 0; }
+  [[ -n "$scope" ]] || die "mv needs a destination scope (-g, --root, -l, or -p)"
+  local dest entry f
+  resolve_target; dest="$TARGET"
+
+  for entry in "${operands[@]}"; do
+    local sources=()
+    while IFS= read -r f; do
+      [[ -f "$f" ]] || continue
+      [[ "$f" -ef "$dest" ]] && continue
+      grep -qxF -e "$entry" -- "$f" && sources+=("$f") || true
+    done < <(candidate_files)
+
+    if [[ ${#sources[@]} -eq 0 ]]; then
+      warn "not found in any ignore file: $entry"; exit 1
+    fi
+    if [[ ${#sources[@]} -gt 1 ]]; then
+      warn "in multiple files, move manually: $entry"
+      printf '  %s\n' "${sources[@]}" >&2
+      exit 1
+    fi
+
+    local src="${sources[0]}"
+    if $dry_run; then
+      printf 'would move %s: %s -> %s\n' "$entry" "$src" "$dest"; continue
+    fi
+    remove_lines "$src" "$entry"
+    ensure_trailing_newline "$dest"
+    printf '%s\n' "$entry" >>"$dest"
+    printf 'move %s: %s -> %s\n' "$entry" "$src" "$dest"
+  done
+}
+
+ignore_ls() {
+  local args=(--others --ignored --exclude-standard)
+  $all || args+=(--directory)
+  if $verbose; then
+    local p v meta
+    git ls-files "${args[@]}" -- ${operands[@]+"${operands[@]}"} | while IFS= read -r p; do
+      v=$(git check-ignore -v -- "$p" 2>/dev/null || true)
+      if [[ -n "$v" ]]; then meta=${v%%$'\t'*}; printf '%s\t%s\n' "$p" "${meta%:*}"
+      else printf '%s\n' "$p"; fi
+    done
+  else
+    git ls-files "${args[@]}" -- ${operands[@]+"${operands[@]}"}
+  fi
+}
+
+main() {
+  parse_args "$@"
+  case "${verb:-show}" in
+    show)             ignore_show ;;
+    add)              ignore_add ;;
+    rm)               ignore_rm ;;
+    mv)               ignore_mv ;;
+    ls|ls-files)      ignore_ls ;;
+    *) die "unknown command: $verb" ;;
+  esac
+}
+
+main "$@"

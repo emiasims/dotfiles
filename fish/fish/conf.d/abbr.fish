@@ -53,6 +53,11 @@ abbr --add grim 'git rebase -i (git rev-parse --short origin/main 2>/dev/null; o
 abbr --add glo 'git log --all --oneline --decorate --graph -n 20'
 abbr --add glb 'git log --oneline --decorate --graph -n 20'
 abbr --add gdf 'git diff --name-only --cached --diff-filter=AM'
+abbr --add gi 'git ignore'
+abbr --add gia 'git ignore add'
+abbr --add gir 'git ignore rm'
+abbr --add gim 'git ignore mv'
+abbr --add gil 'git ignore ls'
 
 # config defined in functions
 abbr --add cst 'config status'

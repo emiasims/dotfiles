@@ -2,34 +2,52 @@
 set -eo pipefail
 IFS=$'\n\t'
 
-function update_nvim() {
-  SRC=$HOME/.local/src
-  mkdir -p "$SRC"
-  cd "$SRC"
+SRC=$HOME/.local/src
+BUILD=nightly
+if [[ "$1" = "-s" || "$1" = "--stable" ]]; then BUILD=stable; fi
 
-  local build=nightly
-  if [[ "$1" = "-s" || "$1" = "--stable" ]]; then
-    build=stable
-  fi
+version() { "$1" --version | head -n1 | cut -f2 -d' '; }
+fetch_nvim() { curl -fsSL "https://github.com/neovim/neovim/releases/download/$BUILD/$1" -o "$1"; }
 
+update_nvim() {
   if [[ -f nvim.appimage ]]; then
-    local version
-    version=$(./nvim.appimage --version | head -n1 | cut -f2 -d' ')
-    mv "$SRC/nvim.appimage" "$SRC/nvim-${version}.appimage"
+    mv nvim.appimage "nvim-$(version ./nvim.appimage).appimage"
   fi
 
-  local url=https://github.com/neovim/neovim/releases/download/$build/nvim-linux-x86_64.appimage
-  wget "$url" -O nvim.appimage > /dev/null 2>&1
-  rm -rf nvim-runtime
+  fetch_nvim nvim-linux-x86_64.appimage
+  mv nvim-linux-x86_64.appimage nvim.appimage
   chmod 755 nvim.appimage
-  ./nvim.appimage --appimage-extract > /dev/null 2>&1
+
+  rm -rf nvim-runtime squashfs-root
+  ./nvim.appimage --appimage-extract > /dev/null
   mv squashfs-root nvim-runtime
 
   ln -sf "$SRC/nvim-runtime/AppRun" "$HOME/.local/bin/nvim"
-  mkdir -p ~/.local/share/applications
-  ln -sf "$SRC/nvim-runtime/nvim.desktop" ~/.local/share/applications
-
-  echo "Installed $(nvim-runtime/AppRun --version | head -n1 | cut -f2 -d' ')"
+  mkdir -p "$HOME/.local/share/applications"
+  ln -sf "$SRC/nvim-runtime/nvim.desktop" "$HOME/.local/share/applications"
 }
 
-update_nvim "$1"
+update_nvim_mac() {
+  local arch=x86_64
+  if [[ "$(uname -m)" = "arm64" ]]; then arch=arm64; fi
+  local tarball=nvim-macos-$arch.tar.gz
+
+  if [[ -x nvim-runtime/bin/nvim ]]; then
+    local old
+    old=nvim-$(version ./nvim-runtime/bin/nvim)
+    rm -rf "$old" && mv nvim-runtime "$old"
+  fi
+
+  fetch_nvim "$tarball"
+  xattr -c "$tarball"  # clear quarantine, else Gatekeeper blocks the binary
+  rm -rf "nvim-macos-$arch"
+  tar xzf "$tarball" && rm -f "$tarball"
+  mv "nvim-macos-$arch" nvim-runtime
+
+  ln -sf "$SRC/nvim-runtime/bin/nvim" "$HOME/.local/bin/nvim"
+}
+
+mkdir -p "$SRC" "$HOME/.local/bin"
+cd "$SRC"
+if [[ "$(uname -s)" = "Darwin" ]]; then update_nvim_mac; else update_nvim; fi
+echo "Installed $(version "$HOME/.local/bin/nvim")"

@@ -87,3 +87,9 @@ if test -n "$NVIM"
   abbr --add vi 'nvim --server $NVIM --remote'
   abbr --add vip 'nvim --server $NVIM --remote-tab'
 end
+
+if test (uname) = "Darwin"
+  abbr --add ywd 'pwd | tr -d "\\n" | pbcopy'
+else
+  abbr --add ywd 'pwd | tr -d "\\n" | xclip -selection clipboard'
+end

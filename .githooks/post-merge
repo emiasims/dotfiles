@@ -1,0 +1,4 @@
+#!/bin/sh
+# Apply a pulled base_settings.json before the next Claude session starts.
+[ -x "$HOME/.claude/sync_settings.py" ] && exec "$HOME/.claude/sync_settings.py"
+exit 0

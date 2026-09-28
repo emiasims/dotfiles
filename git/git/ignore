@@ -12,7 +12,7 @@ opencode.json
 opencode.jsonc
 .opencode
 .venv
-.claude
+/.claude
 notes.md
 .DS_Store
 !tags/

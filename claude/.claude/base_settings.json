@@ -27,7 +27,6 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "claude-opus-5-5",
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.py",
@@ -35,11 +34,6 @@
   },
   "outputStyle": "sanity",
   "effortLevel": "xhigh",
-  "modelSettings": {
-    "claude-opus-5-5": {
-      "effortLevel": "high"
-    }
-  },
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark-ansi",
